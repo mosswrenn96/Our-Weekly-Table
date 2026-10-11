@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Weeknight Table</title>
+<title>Our Weekly Table</title>
 <meta name="theme-color" content="#2f7d5b">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Meal Planner">
+<meta name="apple-mobile-web-app-title" content="Weekly Table">
 <link rel="icon" href="icon.png">
 <link rel="apple-touch-icon" href="icon.png">
 <style>
@@ -78,11 +78,17 @@ footer{color:var(--mute);font-size:13px;text-align:center;margin-top:30px}
 #toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#26302b;color:#fff;padding:10px 18px;border-radius:999px;font-size:15px;opacity:0;pointer-events:none;transition:opacity .2s;z-index:50}
 #toast.show{opacity:1}
 .hide{display:none!important}
+.shophead{display:flex;justify-content:space-between;align-items:center;margin-top:12px;cursor:pointer}
+.seg{display:flex;background:var(--g2);border-radius:12px;padding:3px;margin-top:6px}
+.seg button{flex:1;border:0;background:none;height:38px;border-radius:10px;font-size:15px;font-weight:600;color:var(--g);cursor:pointer}
+.seg button.on{background:var(--g);color:#fff}
+.mealh{font-weight:700;margin:16px 0 2px}
+.item .badge{margin:0 0 0 6px;font-size:10px;padding:1px 6px;height:auto;vertical-align:middle}
 </style>
 </head>
 <body>
 <div class="wrap">
-<header><h1>🥘 Weeknight Table</h1><p class="sub">Pick your meals. Get recipes and a store-by-store shopping list.</p></header>
+<header><h1>🥘 Our Weekly Table</h1><p class="sub">Pick your meals. Get recipes and a store-by-store shopping list.</p></header>
 
 <section class="card" id="controls">
   <div class="row">
@@ -107,8 +113,10 @@ footer{color:var(--mute);font-size:13px;text-align:center;margin-top:30px}
   <div class="card summary"><div><div class="cost" id="cost"></div><div class="meta" id="costNote">Rough estimate from typical Aldi/Walmart prices.</div></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm" id="cpRec" type="button">📋 Copy recipes</button><button class="btn sm" id="cpShop" type="button">🛒 Copy shopping list</button></div></div>
   <h2>Your meals</h2><div id="recipes"></div>
-  <h2>Shopping list</h2><div class="meta">Tap items to check them off while you shop.</div>
-  <div class="card" id="shop"></div>
+  <div class="shophead" id="shopHead"><h2>Shopping list</h2><button class="ghost" id="shopCol" type="button">Hide ▴</button></div>
+  <div id="shopBody"><div class="seg" id="seg"><button type="button" data-view="all">All groceries</button><button type="button" data-view="meal">By meal</button></div>
+  <div class="meta" style="margin-top:8px">Tap items to check them off while you shop.</div>
+  <div class="card" id="shop"></div></div>
   <h2>Bonus finds</h2><div class="meta">Optional extras that are popular right now.</div>
   <div class="card" id="bonus"></div>
 </section>
@@ -158,11 +166,26 @@ function lineText(a,u,name,prep){
   return prep?s+', '+prep:s;
 }
 
+function qtyOnly(a,u){
+  if(VOL[u])return volStr(a*VOL[u]);
+  if(u==='oz'||u==='lb'){const oz=u==='lb'?a*16:a;return oz>=16?fmt(oz/16)+' lb':fmt(oz)+' oz'}
+  if(u==='')return fmt(a);
+  if(u==='inch')return fmt(a)+'-inch piece';
+  return fmt(a)+' '+(a>1.01?UL[u][1]:UL[u][0]);
+}
 // ---------- state ----------
 const S={meals:10,servings:2,cuisines:[],diets:[],time:0,q:'',plan:null};
 const saved=store.get('wt_opts',null);
 if(saved)Object.assign(S,{meals:saved.meals||10,servings:saved.servings||2,cuisines:(saved.cuisines||[]).filter(c=>DB.cuisines.includes(c)),diets:(saved.diets||[]).filter(d=>DIETS.includes(d)),time:saved.time||0});
-let pantry=new Set((store.get('wt_pantry',[])||[]).filter(p=>DB.pantry.includes(p)));
+const sp=store.get('wt_pantry',null);
+let pantry=new Set(Array.isArray(sp)?sp.filter(p=>DB.pantry.includes(p)):DB.pantry);
+const ui=Object.assign({view:'all',collapsed:false},store.get('wt_ui',{}));
+function applyUI(){
+  $('#shopBody').classList.toggle('hide',ui.collapsed);
+  $('#shopCol').textContent=ui.collapsed?'Show ▾':'Hide ▴';
+  document.querySelectorAll('#seg button').forEach(b=>b.classList.toggle('on',b.dataset.view===ui.view));
+  store.set('wt_ui',ui);
+}
 const opts=()=>({meals:S.meals,servings:S.servings,cuisines:S.cuisines,diets:S.diets,time:S.time,q:S.q});
 const saveOpts=()=>store.set('wt_opts',{meals:S.meals,servings:S.servings,cuisines:S.cuisines,diets:S.diets,time:S.time});
 
@@ -252,8 +275,16 @@ function render(){
   const [lo,hi]=costOf(p);
   $('#cost').textContent=`${p.recipes.length} meals · about $${lo}–$${hi}`;
   $('#recipes').innerHTML=p.recipes.map((id,i)=>recipeCard(byId[id],i,p.servings)).join('');
-  const ag=aggregate(p.recipes,p.servings,pantry);
   let h='';
+  if(ui.view==='meal'){
+    const f=p.servings/DB.base;
+    p.recipes.forEach((id,i)=>{
+      const r=byId[id],lines=r.i.filter(x=>!pantry.has(x[2]));
+      h+=`<div class="mealh">${i+1}. ${esc(r.n)}</div>`+(lines.length?lines.map(([a,u,n])=>{const key='m:'+id+':'+n,on=p.chk[key],st=DB.items[n].s;
+        return `<label class="item${on?' done':''}"><input type="checkbox" data-chk="${esc(key)}"${on?' checked':''}><span>${esc(cap(n))}<span class="badge ${st}">${STORE_NAME[st]}</span></span><span class="q">${esc(qtyOnly(a*f,u))}</span></label>`}).join(''):'<div class="meta">Nothing to buy for this one.</div>');
+    });
+  }else{
+  const ag=aggregate(p.recipes,p.servings,pantry);
   for(const s of 'aw'){
     h+=`<div class="store ${s}"><h3>${STORE_NAME[s]}</h3>`;
     let any=false;
@@ -264,6 +295,7 @@ function render(){
     }
     if(!any)h+=`<div class="meta">Nothing needed here.</div>`;
     h+='</div>';
+  }
   }
   const sk=skipped(p.recipes);
   if(sk.length)h+=`<div class="note">Not listed because you said you have them: ${esc(sk.join(', '))}.</div>`;
@@ -321,7 +353,10 @@ function recipesText(p){
 function shopText(p){
   const ag=aggregate(p.recipes,p.servings,pantry),d=new Date(p.ts).toLocaleDateString(undefined,{month:'long',day:'numeric'});
   let t=`SHOPPING LIST — ${d}\n`;
-  for(const s of 'aw'){
+  if(ui.view==='meal'){
+    const f=p.servings/DB.base;
+    p.recipes.forEach((id,i)=>{const r=byId[id];t+=`\n${i+1}. ${r.n.toUpperCase()}\n`+r.i.filter(x=>!pantry.has(x[2])).map(([a,u,n])=>`- ${cap(n)}: ${qtyOnly(a*f,u)} (${STORE_NAME[DB.items[n].s]})`).join('\n')+'\n'});
+  }else for(const s of 'aw'){
     t+=`\n${STORE_NAME[s].toUpperCase()}\n`;
     for(const [ak,al] of DB.aisles){const l=ag[s][ak];if(!l)continue;t+=`\n${al}\n`+l.map(x=>`- ${cap(x.name)}: ${x.qty}${x.note?' ('+x.note+')':''}`).join('\n')+'\n'}
   }
@@ -334,8 +369,10 @@ document.addEventListener('click',e=>{
   const t=e.target.closest('button,input,label');
   const dd=$('#dd');
   if(!e.target.closest('#dd'))dd.classList.remove('open');
+  if(e.target.closest('#shopHead')){ui.collapsed=!ui.collapsed;applyUI();return}
   if(!t)return;
   if(t.id==='ddBtn'){dd.classList.toggle('open');return}
+  if(t.dataset.view){ui.view=t.dataset.view;applyUI();render();return}
   if(t.dataset.step){
     const k=t.dataset.step,d=+t.dataset.d,lim=k==='meals'?[1,21]:[1,8];
     S[k]=Math.min(lim[1],Math.max(lim[0],S[k]+d));renderControls();saveOpts();return}
@@ -359,10 +396,10 @@ document.addEventListener('change',e=>{
 });
 $('#q').addEventListener('input',e=>{S.q=e.target.value});
 
-renderControls();renderPanel();renderHist();
+renderControls();renderPanel();renderHist();applyUI();
 const age=Math.floor((Date.now()-new Date(DB.updated))/864e5);
 $('#foot').innerHTML=`${DB.recipes.length} recipes · refreshed ${new Date(DB.updated+'T12:00:00').toLocaleDateString(undefined,{month:'long',day:'numeric',year:'numeric'})}`+(age>45?'<br>It’s been a while — time for a refresh!':'')+'<br>Prices and store availability are estimates.';
-window.__wt={DB,S,fmt,lineText,volStr,aggregate,plan,eligible,generate,swap,recipesText,shopText,opts,pantryRef:()=>pantry,setPantry:s=>{pantry=s}};
+window.__wt={ui,qtyOnly,DB,S,fmt,lineText,volStr,aggregate,plan,eligible,generate,swap,recipesText,shopText,opts,pantryRef:()=>pantry,setPantry:s=>{pantry=s}};
 })();
 </script>
 </body>
